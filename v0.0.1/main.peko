@@ -1,0 +1,565 @@
+//! This file implements socket functionality for Pekoscript.
+//! Websockets, HTTP Sockets, and TCP sockets are all implemented here.
+//  ________  _______   ___  __    ________
+// |\   __  \|\  ___ \ |\  \|\  \ |\   __  \
+// \ \  \|\  \ \   __/|\ \  \/  /|\ \  \|\  \
+//  \ \   ____\ \  \_|/_\ \   ___  \ \  \\\  \
+//   \ \  \___|\ \  \_|\ \ \  \\ \  \ \  \\\  \
+//    \ \__\    \ \_______\ \__\\ \__\ \_______\
+//     \|__|     \|_______|\|__| \|__|\|_______|
+//
+// Copyright 2025 Preston Brown. All Rights Reserved.
+
+import threads;
+
+platform android {
+    link objects::android::sockets as object;
+}
+
+platform ios {
+    arch x86_64 {
+        link objects::ios::x86_64::sockets as object;
+    }
+
+    arch arm {
+        link objects::ios::arm::sockets as object;
+    }
+}
+
+platform windows {
+    link objects::windows::sockets as object;
+}
+
+platform linux {
+    arch x86_64 {
+        link objects::linux::x86_64::sockets as object;
+    }
+
+    arch arm {
+        link objects::linux::arm::sockets as object;
+    }
+}
+
+platform macos {
+    arch x86_64 {
+        link objects::macos::x86_64::sockets as object;
+    }
+
+    arch arm {
+        link objects::macos::arm::sockets as object;
+    }
+}
+
+/// Represents a base response returned from a socket.
+class Response {
+    [private] content: String;
+
+    constructor(content: String) {
+        this.content = content;
+    }
+    
+    /// Returns the response contents.
+    fn get_response() => String {
+        return this.content;
+    }
+}
+
+[external] fn create_request(host: string, port: int, request: string) => string;
+
+/// Creates an HTTP post request with the provided info.
+fn post_request(host: string, path: string, port: int, content: string) => string {
+    return extern::create_request(host, port, `POST ${path} HTTP/1.0\r\nContent-Type: text/plain\r\nContent-Length: ${Runtime::length(content)}\r\n\r\n${content}`);
+}
+
+/// Creates an HTTP post request with the provided info, with the port defaulting to 80.
+fn post_request(host: string, path: string, content: string) => string {
+    return extern::create_request(host, 80, `POST ${path} HTTP/1.0\r\nContent-Type: text/plain\r\nContent-Length: ${Runtime::length(content)}\r\n\r\n${content}`);
+}
+
+/// Creates an HTTP get request with the provided info.
+fn get_request(host: string, path: string, port: int) => string {
+    return extern::create_request(host, port, `GET ${path} HTTP/1.0\r\n\r\n`);
+}
+
+/// Creates an HTTP get request with the provided info, with the port defaulting to 80.
+fn get_request(host: string, path: string) => string {
+    return extern::create_request(host, 80, `GET ${path} HTTP/1.0\r\n\r\n`);
+}
+
+/// Represents a base socket Request
+class Request {
+    [private] content: String;
+
+    constructor(content: String) {
+        this.content = content;
+    }
+
+    /// Returns the request info
+    fn get_request() => String {
+        return this.content;
+    }
+
+    /// Sends this request to the provided host and port.
+    /// This will wait until the host sends a response back, and 
+    /// then the response will be returned.
+    fn send(host: string, port: int) => string {
+        return extern::create_request(host, port, this.content);
+    }
+
+    /// Sends this request to the provided host at port 80
+    /// This will wait until the host sends a response back, and 
+    /// then the response will be returned.
+    fn send(host: string) => string {
+        return extern::create_request(host, 80, this.content);
+    }
+
+    /// Sends this request to the provided host and port.
+    fn send_no_response(host: string, port: int) {
+        threads::new_thread(closure[this, host, port]() {
+            extern::create_request(host, port, this.content);
+        });
+    }
+
+    /// Sends this request to the provided host at port 80.
+    fn send_no_response(host: string) {
+        threads::new_thread(closure[this, host]() {
+            extern::create_request(host, 80, this.content);
+        });
+    }
+}
+
+/// Simple TCP client that connects to a host and port
+class Client {
+    [private] server_address: String;
+    [private] port: int;
+
+    /// Creates a new client
+    constructor(server_address: String, port: int) {
+        this.server_address = server_address;
+        this.port = port;
+    }
+
+    /// Returns the address to the connected server
+    fn get_server_address() => String {
+        return this.server_address;
+    }
+
+    /// Returns the port to the connected server
+    fn get_port() => int {
+        return this.port;
+    }
+
+    /// Sends a request to the connected server and waits for a response
+    fn request(request: Request) => Response {
+        return Response(extern::create_request(this.server_address, this.port, request.get_request()));
+    }
+}
+
+[external] fn open_socket(port: &int, run: &bool, request_handle: (string)(opaque, string), data: opaque) => int;
+
+/// Simple TCP socket server.
+/// If the port is set to 0 before connecting, than a random open port will be selected.
+class Socket {
+    [private] port: int;
+    [private] callback: closure(Request) => Response;
+    [private] run: bool;
+
+    /// Creates a new TCP socket on this port
+    constructor(port: int) {
+        this.port = port;
+        this.run = false;
+        this.callback = closure(req: Request) => Response {
+            return Response("");
+        };
+    }
+
+    /// Creates a new TCP socket on this port with the provided request callback
+    constructor(port: int, callback: closure(Request) => Response) {
+        this.port = port;
+        this.callback = callback;
+        this.run = false;
+    }
+
+    /// Creates a blank TCP socket
+    constructor() {
+        this.port = 0;
+        this.run = false;
+        this.callback = closure(req: Request) => Response {
+            return Response("");
+        };
+    }
+
+    /// Creates a blank TCP socket with the provided callback
+    constructor(callback: closure(Request) => Response) {
+        this.port = 0;
+        this.callback = callback;
+        this.run = false;
+    }
+
+    /// Sets the callback for this socket
+    [mutator] fn set_callback(callback: closure(Request) => Response) {
+        this.callback = callback;
+    }
+
+    /// Sets the port this socket connects to
+    [mutator] fn set_port(port: int) {
+        this.port = port;
+    }
+
+    /// Returns the port this socket is connected to
+    fn get_port() => int {
+        return this.port;
+    }
+
+    /// Runs this socket in current thread; blocking.
+    fn listen_attached() {
+        binded_callback := closure[this](str: string) => string {
+            return callback(Request(str)).get_response();
+        };
+
+        this.run = true;
+
+        extern::open_socket(&this.port, &this.run, binded_callback.function, binded_callback.context)
+    }
+
+    /// Runs this socket in a new thread; non-blocking.
+    fn listen() {
+        threads::new_thread(closure[this]() {
+            this.listen_attached();
+        });
+    }
+
+    /// Stops this socket.
+    fn stop() {
+        this.run = false;
+    }
+}
+
+/// Opens a new TCP socket at the provided port with the provided callback
+fn open_socket(port: int, callback: closure(Request) => Response) {
+    socket := Socket(port, callback);
+    socket.listen();
+}
+
+/// Represents an HTTP server request.
+class HttpRequest from Request {
+    [private] type: String;
+    [private] headers: Map<String, String>;
+    [private] url_arguments: Map<String, String>;
+
+    /// Creates a new request.
+    /// 
+    /// @param type the request type
+    /// @param headers the request headers
+    /// @param url_arguments any arguments passed to the url
+    constructor(type: String, headers: Map<String, String>, url_arguments: Map<String, String>) {
+        this.type = type;
+        this.headers = headers;
+        this.url_arguments = url_arguments;
+    }
+    
+    /// Returns the request method.
+    /// 
+    /// @example {
+    /// fn handleHTTPRequest(req: HttpRequest) {
+    ///     if req.request_type() == "post" {
+    ///         console::println("This is a post request!");
+    ///     }
+    /// }
+    /// }
+    fn request_type() => String {
+        return this.type;
+    }
+
+    /// Gets a specific url argument from this request.
+    /// If the argument doesn't exist, returns None.
+    fn get(url_argument: String) => String? {
+        return this.url_arguments[url_argument];
+    }
+
+    /// Gets a specific header from this request.
+    /// If the header doesn't exist, returns None.
+    fn get_header(header: String) => String? {
+        return this.headers[header];
+    }
+
+    [operator []](index: String) => String? {
+        return this.url_arguments[index];
+    }
+}
+
+/// Represents a response to an HTTP request.
+class HttpResponse from Response {
+    [private] status_code: int;
+    [private] content_type: string;
+
+    /// Creates a new html response with the provided content and status code
+    constructor(content: String, status_code: int) => super(content) {
+        this.status_code = status_code;
+        this.content_type = "text/html";
+    }
+
+    /// Creates a new response with the provided content and status code and content mime type
+    constructor(content: String, status_code: int, content_type: string) => super(content) {
+        this.status_code = status_code;
+        this.content_type = content_type;
+    }
+
+    /// Returns the set status code for this response.
+    fn get_status_code() => int {
+        return this.status_code;
+    }
+
+    /// Returns the response as a string.
+    fn get_response() => String {
+        fmts := Array<string>();
+        final_response := String(`HTTP/1.1 ${this.status_code} `);
+        
+        if this.status_code == 404 {
+            final_response.push("NOT FOUND\n");
+        } else {
+            final_response.push("OK\n");
+        }
+        
+        final_response.push(`Server: pekoweb\nContent-type: ${this.content_type}; charset=utf-8\nContent-Length: ${this.content.length()}\n\n${this.content}`);
+
+        return final_response;
+    }
+
+    [operator string]() => string {
+        return this.get_response();
+    }
+}
+
+/// A simple HTTP socket server.
+/// This server can only handle one connection at a time.
+/// If the port is set to 0, then when connecting a random open port will be selected.
+class HttpSocket {
+    [private] socket: Socket;
+    [private] routes: Map<String, closure(HttpRequest) => HttpResponse>;
+    [private] current_route: String;
+
+    /// Creates a new HTTP server at the designated port.
+    constructor(port: int) {
+        this.socket = Socket(port, closure[this](request: Request) => Response {
+            return this.handle_request(request);
+        });
+        this.routes = Map<String, closure(HttpRequest) => HttpResponse>();
+        this.current_route = String("/");
+    }
+
+    /// Creates a new HTTP server with port 0.
+    constructor() {
+        this.socket = Socket(0, closure[this](request: Request) => Response {
+            return this.handle_request(request);
+        });
+        this.routes = Map<String, closure(HttpRequest) => HttpResponse>();
+        this.current_route = String("/");
+    }
+
+    /// Returns the currently accessed route in the server
+    fn currentRoute() => String {
+        return this.current_route;
+    }
+
+    /// Routes a callback to a specific url route of this HTTP server.
+    /// 
+    /// @example {
+    /// server := HttpSocket(8080);
+    /// server.route("/", closure(req: HttpRequest) => HttpResponse {
+    ///     return HttpResponse("<h1>Hello World</h1>", 200);
+    /// });
+    /// server.run();
+    /// }
+    [mutator] fn route(url: String, handler: closure(HttpRequest) => HttpResponse) {
+        this.routes.insert(url, handler);
+    }
+
+    /// Starts the server on the current thread; blocking.
+    fn listen_attached() {
+        this.socket.listen_attached();
+    }
+
+    /// Starts the server in a different thread; non-blocking.
+    fn listen() {
+        this.socket.listen();
+    }
+
+    /// Returns the port this server is binded to.
+    fn get_port() => int {
+        return this.socket.get_port();
+    }
+
+    [private] fn handle_request(request: Request) => Response {
+        request_lines := String(request.get_request()).split('\n');
+        
+        // Parse the first line, get the request type and uri
+        first_line := request_lines[0];
+        first_line_split := first_line.split(' ');
+
+        request_type := first_line_split[0];
+        route := first_line_split[1].split('?');
+        
+        uri := route[0];
+        url_arguments := Map<String, String>();
+        
+        if route.length() > 1 && route[1].contains('&') {
+            arguments := route[1].split('&');
+
+            for argument in arguments {
+                key_value := argument.split('=');
+                url_arguments.insert(key_value[0], key_value[1]);
+            }
+        }
+        
+        // Parse headers
+        headers := Map<String, String>();
+        
+        line_index := 1;
+
+        while line_index < request_lines.length() && request_lines[line_index] != "\r" {
+            key_value := request_lines[line_index].lsplit(':');
+            
+            value := key_value[1];
+            while value[0] == ' ' {
+                value.remove(0)
+            }
+            
+            headers.insert(key_value[0], value);
+            line_index += 1;
+        }
+
+        while line_index < request_lines.length() && request_lines[line_index] == "\r" {
+            line_index += 1;
+        }
+        
+        // Parse extra data
+        request_data := String();
+        while line_index < request_lines.length() {
+            request_data.push(request_lines[line_index]);
+            line_index += 1;
+        }
+
+        if !routes.contains(uri) {
+            return HttpResponse("<h1>404 Page Not Found</h1>", 404)
+        }
+
+        this.current_route = uri;
+
+        return routes[uri](HttpRequest(request_type, headers, url_arguments));
+    }
+}
+
+[external] fn open_web_socket(socket: &int, port: &int, run: &bool, message_handle: (string)(opaque, int, string), data: opaque) => int;
+[external] fn send_text(socket: int, text: string) => int;
+
+/// Represents a simple websocket.
+/// This socket can only handle one connection at a time.
+/// If the port is set to 0, it will automatically bind to a random open port.
+class WebSocket {
+    [private] port: int;
+    [private] callback: closure(WebSocket, Request);
+    [private] run: bool;
+    [private] socket: int;
+
+    /// Creates an empty websocket
+    constructor() {
+        this.port = 0;
+        this.callback = closure(ws: WebSocket, req: Request) {};
+        this.run = false;
+        this.socket = 0;
+    }
+
+    /// Creates a websocket with the provided callback at port 0
+    constructor(callback: closure(WebSocket, Request)) {
+        this.port = 0;
+        this.callback = callback;
+        this.run = false;
+        this.socket = 0;
+    }
+
+    /// Creates an empty websocket at port 0
+    constructor(port: int) {
+        this.port = port;
+        this.callback = closure(ws: WebSocket, req: Request) {};
+        this.run = false;
+        this.socket = 0;
+    }
+
+    /// Creates a websocket with the provided callback at the provided port
+    constructor(port: int, callback: closure(WebSocket, Request)) {
+        this.port = port;
+        this.callback = callback;
+        this.run = false;
+        this.socket = 0;
+    }
+
+    /// Sends the provided text to the connected client of this socket.
+    fn send(text: String) {
+        extern::send_text(this.socket, text);
+    }
+
+    /// Sends the provided text to the connected client of this socket without waiting for a response.
+    fn send_no_response(text: String) {
+        threads::new_thread(closure[this, text]() {
+            extern::send_text(this.socket, text);
+        });
+    }
+
+    /// Sets the websocket callback.
+    [mutator] fn set_callback(callback: closure(WebSocket, Request)) {
+        this.callback = callback;
+    }
+
+    /// Sets the port this socket should bind to.
+    [mutator] fn set_port(port: int) {
+        this.port = port;
+    }
+
+    /// Returns the port this socket will bind to.
+    fn get_port() => int {
+        return this.port;
+    }
+
+    /// Starts the socket on the current thread; blocking.
+    fn listen_attached() {
+        binded_callback := closure[this](socket: int, str: string) => string {
+            this.socket = socket;
+            callback := this.callback;
+            callback(this, Request(str));
+            return "";
+        };
+
+        this.run = true;
+
+        extern::open_web_socket(&this.socket, &this.port, &this.run, binded_callback.function, binded_callback.context)
+    }
+
+    /// Starts the socket in a different thread; non-blocking.
+    fn listen() {
+        threads::new_thread(closure[this]() {
+            this.listen_attached();
+        });
+    }
+
+    /// Stops the socket.
+    [mutator] fn stop() {
+        this.run = false;
+    }
+}
+
+/// Opens a websocket on the specified port with the provided callback.
+/// 
+/// @example {
+/// open_web_socket(3000, closure(ws: WebSocket, req: Request) {
+///     if req.get_request() == "Hello" {
+///         ws.send("Hi!");
+///     }
+/// });
+/// }
+fn open_web_socket(port: int, callback: closure(WebSocket, Request)) {
+    threads::new_thread(closure[port, callback]() {
+        socket := WebSocket(port, callback);
+        socket.listen();
+    })
+}

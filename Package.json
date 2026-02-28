@@ -1,0 +1,10 @@
+{
+    "description": "Library for communicating through sockets",
+    "contributor": {
+        "organization": "Peko"
+    },
+    "versions": [
+        "v0.0.1"
+    ],
+    "dependencies": []
+}
