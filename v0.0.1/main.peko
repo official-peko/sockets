@@ -10,7 +10,7 @@
 //
 // Copyright 2025 Preston Brown. All Rights Reserved.
 
-import threads;
+import threads@"v0.0.1";
 
 platform android {
     link objects::android::sockets as object;
