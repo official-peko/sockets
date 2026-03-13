@@ -223,16 +223,17 @@ extern "C"
             return "Error: response is bigger than response buffer";
 
         close(sockfd);
-
         return response;
     }
 }
+
 #else
 #include <winsock2.h>
 #include <Ws2tcpip.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <string>
 #include <Windows.h>
 #include <iostream>
 #include <string.h>
@@ -244,7 +245,6 @@ extern "C"
 #define BUFFER_SIZE 2048
 
 extern "C" void *gc_alloc(int bytes);
-extern "C" char *runtime_int_to_string(int number);
 
 SOCKET create_socket(int *port)
 {
@@ -264,7 +264,7 @@ SOCKET create_socket(int *port)
     hints.ai_flags = AI_PASSIVE;
 
     // Resolve the server address and port
-    iResult = getaddrinfo(NULL, runtime_int_to_string(*port), &hints, &result);
+    iResult = getaddrinfo(NULL, std::to_string(*port).c_str(), &hints, &result);
     if (iResult != 0)
     {
         return 1;
